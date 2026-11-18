@@ -1,0 +1,1285 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>BellCloud — IoT Gas Detector Platform</title>
+<meta name="description" content="Engineering case study: a management platform for industrial IoT gas detectors — binary device protocol, browser-direct BLE/Serial communication, log ingestion pipeline, and multi-tenant RBAC.">
+<meta name="author" content="swandev618">
+<meta property="og:type" content="website">
+<meta property="og:title" content="BellCloud — IoT Gas Detector Platform">
+<meta property="og:description" content="Engineering case study of a full-stack industrial IoT platform: declarative binary protocol codec, Web Bluetooth/Serial device communication, replayable log ingestion, and three-tier live aggregation.">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Ctext y='13' font-size='13'%3E%F0%9F%93%A1%3C/text%3E%3C/svg%3E">
+<style>
+  *,*::before,*::after{box-sizing:border-box}
+  html{-webkit-text-size-adjust:100%}
+  body{margin:0}
+  h1,h2,h3,h4,p,dl,dd,pre,table{margin:0}
+  img{max-width:100%;height:auto;display:block}
+</style>
+</head>
+<body>
+<style>
+  /* ============================================================
+     Tokens — slate ground with a teal bias; two-state semantic color
+     (teal = nominal, amber = alarm) borrowed from the instruments
+     this platform actually monitors.
+     ============================================================ */
+  :root {
+    --ground:      #11161a;
+    --surface:     #1a2127;
+    --surface-2:   #212a31;
+    --line:        #2c373f;
+    --line-soft:   #222b32;
+    --text:        #e6eaec;
+    --text-dim:    #a3b0b6;
+    --text-mute:   #7c8a91;
+    --nominal:     #5fa896;
+    --alarm:       #e0913c;
+    --critical:    #c7584e;
+
+    --font-display: "Archivo Narrow", "Roboto Condensed", "Oswald",
+                    ui-sans-serif, system-ui, sans-serif;
+    --font-body:    "Source Sans 3", "Source Sans Pro", -apple-system,
+                    BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    --font-mono:    "JetBrains Mono", "SF Mono", ui-monospace,
+                    "Cascadia Mono", Menlo, Consolas, monospace;
+
+    --rail: 13.5rem;
+    --measure: 68ch;
+  }
+
+  @media (prefers-color-scheme: light) {
+    :root {
+      --ground:    #f4f6f6;
+      --surface:   #ffffff;
+      --surface-2: #eceff0;
+      --line:      #d2d9db;
+      --line-soft: #e2e7e8;
+      --text:      #161d21;
+      --text-dim:  #44525a;
+      --text-mute: #6b787e;
+      --nominal:   #2f7d6a;
+      --alarm:     #a8600f;
+      --critical:  #a8372c;
+    }
+  }
+
+  :root[data-theme="dark"] {
+    --ground: #11161a; --surface: #1a2127; --surface-2: #212a31;
+    --line: #2c373f; --line-soft: #222b32;
+    --text: #e6eaec; --text-dim: #a3b0b6; --text-mute: #7c8a91;
+    --nominal: #5fa896; --alarm: #e0913c; --critical: #c7584e;
+  }
+  :root[data-theme="light"] {
+    --ground: #f4f6f6; --surface: #ffffff; --surface-2: #eceff0;
+    --line: #d2d9db; --line-soft: #e2e7e8;
+    --text: #161d21; --text-dim: #44525a; --text-mute: #6b787e;
+    --nominal: #2f7d6a; --alarm: #a8600f; --critical: #a8372c;
+  }
+
+  * { box-sizing: border-box; }
+
+  body {
+    margin: 0;
+    background: var(--ground);
+    color: var(--text);
+    font-family: var(--font-body);
+    font-size: 1rem;
+    line-height: 1.65;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  /* ---------- Layout shell ---------- */
+  .shell {
+    display: grid;
+    grid-template-columns: var(--rail) minmax(0, 1fr);
+    gap: 0;
+    max-width: 78rem;
+    margin: 0 auto;
+  }
+
+  /* ---------- Section rail (instrument scale) ---------- */
+  .rail {
+    position: sticky;
+    top: 0;
+    align-self: start;
+    height: 100vh;
+    padding: 2.5rem 0 2rem 1.5rem;
+    border-right: 1px solid var(--line-soft);
+    display: flex;
+    flex-direction: column;
+    gap: 2rem;
+    overflow-y: auto;
+  }
+  .rail-mark {
+    font-family: var(--font-display);
+    font-size: 0.95rem;
+    font-weight: 700;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    color: var(--text);
+    text-decoration: none;
+  }
+  .rail-mark span { color: var(--nominal); }
+  .rail nav { display: flex; flex-direction: column; }
+  .rail nav a {
+    position: relative;
+    display: flex;
+    align-items: baseline;
+    gap: 0.6rem;
+    padding: 0.42rem 0;
+    font-family: var(--font-mono);
+    font-size: 0.7rem;
+    letter-spacing: 0.04em;
+    color: var(--text-mute);
+    text-decoration: none;
+    border-left: 2px solid transparent;
+    padding-left: 0.75rem;
+    margin-left: -0.75rem;
+    transition: color .15s, border-color .15s;
+  }
+  .rail nav a:hover,
+  .rail nav a.on { color: var(--text); border-left-color: var(--nominal); }
+  .rail nav a i {
+    font-style: normal;
+    font-variant-numeric: tabular-nums;
+    color: var(--text-mute);
+    opacity: .7;
+  }
+  .rail nav a.on i { color: var(--nominal); opacity: 1; }
+  .rail-foot {
+    margin-top: auto;
+    font-family: var(--font-mono);
+    font-size: 0.65rem;
+    line-height: 1.8;
+    color: var(--text-mute);
+  }
+  .rail-foot a { color: var(--text-dim); }
+
+  /* ---------- Main column ---------- */
+  main { padding: 2.5rem 3.5rem 6rem; min-width: 0; }
+
+  section { padding-block: 3.25rem; border-top: 1px solid var(--line-soft); }
+  section:first-of-type { border-top: 0; padding-top: 0; }
+
+  .eyebrow {
+    font-family: var(--font-mono);
+    font-size: 0.68rem;
+    letter-spacing: 0.16em;
+    text-transform: uppercase;
+    color: var(--nominal);
+    margin: 0 0 0.9rem;
+  }
+
+  h1 {
+    font-family: var(--font-display);
+    font-size: clamp(2.3rem, 5.2vw, 3.6rem);
+    font-weight: 700;
+    line-height: 1.04;
+    letter-spacing: -0.015em;
+    text-wrap: balance;
+    margin: 0 0 1.1rem;
+  }
+  h2 {
+    font-family: var(--font-display);
+    font-size: clamp(1.5rem, 2.6vw, 1.95rem);
+    font-weight: 700;
+    line-height: 1.15;
+    letter-spacing: -0.008em;
+    text-wrap: balance;
+    margin: 0 0 1.4rem;
+  }
+  h3 {
+    font-family: var(--font-display);
+    font-size: 1.1rem;
+    font-weight: 700;
+    letter-spacing: 0.005em;
+    margin: 0 0 0.5rem;
+  }
+  h4 {
+    font-family: var(--font-mono);
+    font-size: 0.74rem;
+    font-weight: 600;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    color: var(--text-dim);
+    margin: 0 0 0.7rem;
+  }
+
+  p { margin: 0 0 1rem; max-width: var(--measure); color: var(--text-dim); }
+  p.lead {
+    font-size: 1.1rem;
+    line-height: 1.6;
+    color: var(--text);
+    max-width: 60ch;
+  }
+  strong { color: var(--text); font-weight: 600; }
+  code {
+    font-family: var(--font-mono);
+    font-size: 0.86em;
+    background: var(--surface-2);
+    border: 1px solid var(--line-soft);
+    border-radius: 3px;
+    padding: 0.08em 0.34em;
+    color: var(--text);
+  }
+  a { color: var(--nominal); }
+
+  /* ---------- Hero readout ---------- */
+  .hero-sub {
+    font-family: var(--font-mono);
+    font-size: 0.78rem;
+    letter-spacing: 0.08em;
+    color: var(--text-mute);
+    margin-bottom: 2rem;
+  }
+  .hero-sub b { color: var(--text-dim); font-weight: 400; }
+
+  .readout {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(8.5rem, 1fr));
+    border: 1px solid var(--line);
+    border-radius: 4px;
+    background: var(--surface);
+    overflow: hidden;
+    margin: 2rem 0 0;
+  }
+  .readout div {
+    padding: 1rem 1.1rem;
+    border-right: 1px solid var(--line-soft);
+    border-bottom: 1px solid var(--line-soft);
+  }
+  .readout div:last-child { border-right: 0; }
+  .readout dt {
+    font-family: var(--font-mono);
+    font-size: 0.62rem;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    color: var(--text-mute);
+    margin-bottom: 0.3rem;
+  }
+  .readout dd {
+    margin: 0;
+    font-family: var(--font-mono);
+    font-size: 1.32rem;
+    font-weight: 600;
+    font-variant-numeric: tabular-nums;
+    color: var(--text);
+    line-height: 1.1;
+  }
+  .readout dd u {
+    text-decoration: none;
+    font-size: 0.68rem;
+    font-weight: 400;
+    color: var(--text-mute);
+    margin-left: 0.2em;
+  }
+
+  /* ---------- Generic card grid ---------- */
+  .grid {
+    display: grid;
+    gap: 1px;
+    background: var(--line-soft);
+    border: 1px solid var(--line-soft);
+    border-radius: 4px;
+    overflow: hidden;
+  }
+  .grid.two   { grid-template-columns: repeat(auto-fit, minmax(17rem, 1fr)); }
+  .grid.three { grid-template-columns: repeat(auto-fit, minmax(13rem, 1fr)); }
+  .grid > article { background: var(--surface); padding: 1.3rem 1.4rem; }
+  .grid > article p { margin-bottom: 0; font-size: 0.93rem; max-width: none; }
+  .grid > article p + p { margin-top: 0.7rem; }
+
+  /* ---------- Status stripe (severity encoded in form) ---------- */
+  .stripe { border-left: 2px solid var(--line); padding-left: 1rem; }
+  .stripe.ok   { border-left-color: var(--nominal); }
+  .stripe.warn { border-left-color: var(--alarm); }
+  .stripe.crit { border-left-color: var(--critical); }
+
+  /* ---------- Pills ---------- */
+  .pills { display: flex; flex-wrap: wrap; gap: 0.4rem; margin: 0 0 1.5rem; padding: 0; list-style: none; }
+  .pills li {
+    font-family: var(--font-mono);
+    font-size: 0.68rem;
+    letter-spacing: 0.03em;
+    color: var(--text-dim);
+    background: var(--surface);
+    border: 1px solid var(--line);
+    border-radius: 2px;
+    padding: 0.2rem 0.5rem;
+  }
+
+  /* ---------- Tables ---------- */
+  .tw { overflow-x: auto; border: 1px solid var(--line-soft); border-radius: 4px; margin: 0 0 1.4rem; }
+  table { width: 100%; border-collapse: collapse; font-size: 0.88rem; background: var(--surface); }
+  th, td { text-align: left; padding: 0.62rem 0.9rem; border-bottom: 1px solid var(--line-soft); vertical-align: top; }
+  th {
+    font-family: var(--font-mono);
+    font-size: 0.65rem;
+    font-weight: 600;
+    letter-spacing: 0.09em;
+    text-transform: uppercase;
+    color: var(--text-mute);
+    background: var(--surface-2);
+    white-space: nowrap;
+  }
+  td { color: var(--text-dim); }
+  tr:last-child td { border-bottom: 0; }
+  td.n, th.n {
+    font-family: var(--font-mono);
+    font-variant-numeric: tabular-nums;
+    white-space: nowrap;
+    color: var(--text);
+  }
+
+  /* ---------- Code block ---------- */
+  pre {
+    margin: 0 0 1.4rem;
+    padding: 1rem 1.15rem;
+    background: var(--surface);
+    border: 1px solid var(--line-soft);
+    border-radius: 4px;
+    overflow-x: auto;
+    font-family: var(--font-mono);
+    font-size: 0.8rem;
+    line-height: 1.6;
+    color: var(--text-dim);
+  }
+  pre code { background: none; border: 0; padding: 0; font-size: inherit; color: inherit; }
+  pre .c { color: var(--text-mute); }
+  pre .k { color: var(--nominal); }
+  pre .v { color: var(--alarm); }
+
+  /* ---------- Flow diagram ---------- */
+  .flow {
+    display: grid;
+    gap: 0.5rem;
+    margin: 0 0 1.4rem;
+    font-family: var(--font-mono);
+    font-size: 0.78rem;
+  }
+  .flow-row {
+    display: grid;
+    grid-template-columns: 7.5rem minmax(0, 1fr);
+    gap: 0.9rem;
+    align-items: start;
+    padding: 0.7rem 0.9rem;
+    background: var(--surface);
+    border: 1px solid var(--line-soft);
+    border-radius: 3px;
+  }
+  .flow-row b {
+    color: var(--nominal);
+    font-weight: 600;
+    font-size: 0.68rem;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    padding-top: 0.1rem;
+  }
+  .flow-row span { color: var(--text-dim); font-family: var(--font-body); font-size: 0.9rem; }
+  .flow-arrow { color: var(--text-mute); text-align: center; font-size: 0.75rem; line-height: 1; }
+
+  /* ---------- Definition rows ---------- */
+  .defs { margin: 0 0 1.4rem; display: grid; gap: 0; }
+  .defs > div {
+    display: grid;
+    grid-template-columns: minmax(8rem, 13rem) minmax(0, 1fr);
+    gap: 1.2rem;
+    padding: 0.85rem 0;
+    border-bottom: 1px solid var(--line-soft);
+  }
+  .defs > div:last-child { border-bottom: 0; }
+  .defs dt {
+    font-family: var(--font-mono);
+    font-size: 0.76rem;
+    color: var(--text);
+    letter-spacing: 0.02em;
+  }
+  .defs dd { margin: 0; font-size: 0.92rem; color: var(--text-dim); }
+
+  /* ---------- Note / caveat ---------- */
+  .note {
+    padding: 1rem 1.2rem;
+    background: var(--surface);
+    border: 1px solid var(--line-soft);
+    border-left: 2px solid var(--alarm);
+    border-radius: 3px;
+    margin: 0 0 1.4rem;
+  }
+  .note p { margin: 0; font-size: 0.9rem; max-width: none; }
+  .note p + p { margin-top: 0.6rem; }
+
+  /* ---------- Footer ---------- */
+  footer {
+    border-top: 1px solid var(--line-soft);
+    padding-top: 2rem;
+    margin-top: 1rem;
+    font-family: var(--font-mono);
+    font-size: 0.73rem;
+    color: var(--text-mute);
+    line-height: 1.9;
+  }
+
+  :where(a, [tabindex]):focus-visible {
+    outline: 2px solid var(--nominal);
+    outline-offset: 2px;
+    border-radius: 2px;
+  }
+
+  /* ---------- Responsive ---------- */
+  @media (max-width: 62rem) {
+    .shell { grid-template-columns: 1fr; }
+    .rail {
+      position: static;
+      height: auto;
+      padding: 1.75rem 1.5rem 1.25rem;
+      border-right: 0;
+      border-bottom: 1px solid var(--line-soft);
+      flex-direction: row;
+      align-items: center;
+      flex-wrap: wrap;
+      gap: 1rem 1.5rem;
+    }
+    .rail nav { flex-direction: row; flex-wrap: wrap; gap: 0 1rem; }
+    .rail nav a { border-left: 0; padding-left: 0; margin-left: 0; }
+    .rail nav a:hover, .rail nav a.on { border-left: 0; }
+    .rail nav a i { display: none; }
+    .rail-foot { margin: 0; width: 100%; }
+    main { padding: 2rem 1.5rem 4rem; }
+    .defs > div { grid-template-columns: 1fr; gap: 0.3rem; }
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    * { transition: none !important; scroll-behavior: auto !important; }
+  }
+  html { scroll-behavior: smooth; }
+</style>
+
+<div class="shell">
+  <aside class="rail">
+    <a class="rail-mark" href="#top">Bell<span>Cloud</span></a>
+    <nav id="rail-nav">
+      <a href="#top"><i>00</i>Overview</a>
+      <a href="#arch"><i>01</i>Architecture</a>
+      <a href="#protocol"><i>02</i>Device Protocol</a>
+      <a href="#browser"><i>03</i>Browser ↔ Device</a>
+      <a href="#ingest"><i>04</i>Log Ingestion</a>
+      <a href="#realtime"><i>05</i>Live Aggregation</a>
+      <a href="#alarm"><i>06</i>Alarm &amp; Push</a>
+      <a href="#rbac"><i>07</i>Auth &amp; Tenancy</a>
+      <a href="#ops"><i>08</i>Operations</a>
+      <a href="#incident"><i>09</i>Post-Mortem</a>
+      <a href="#scope"><i>10</i>Scope &amp; Limits</a>
+    </nav>
+    <div class="rail-foot">
+      Jun – Nov 2026<br>
+      Commercial · private repo<br>
+      <a href="https://github.com/swandev618">github.com/swandev618</a>
+    </div>
+  </aside>
+
+  <main>
+    <!-- ============ 00 OVERVIEW ============ -->
+    <section id="top">
+      <p class="eyebrow">Industrial IoT · Full-stack · 2026</p>
+      <h1>A management platform for portable gas detectors that keeps working when the network doesn't.</h1>
+      <p class="lead">
+        BellCloud monitors fleets of <strong>BellLite</strong> and <strong>BellMini</strong> gas detectors —
+        the instruments workers carry into confined spaces and refineries. It does three jobs that pull in
+        opposite directions: stream live readings to a dashboard, pull months of on-device binary logs over
+        Bluetooth and a serial cradle, and let a technician calibrate a detector from a browser tab with no
+        server in the path.
+      </p>
+      <p>
+        I built and operate the whole thing — React SPA, NestJS API, Postgres schema, the binary protocol
+        codec shared by both, and the CI/CD that ships it. This page walks through the engineering decisions
+        that were actually difficult, including the ones that are still unresolved.
+      </p>
+
+      <dl class="readout">
+        <div><dt>Codebase</dt><dd>110<u>k LOC</u></dd></div>
+        <div><dt>Duration</dt><dd>5<u>months</u></dd></div>
+        <div><dt>DB models</dt><dd>39</dd></div>
+        <div><dt>API routes</dt><dd>127</dd></div>
+        <div><dt>Protocol fns</dt><dd>91</dd></div>
+        <div><dt>Locales</dt><dd>3<u>× 997</u></dd></div>
+        <div><dt>Unit tests</dt><dd>130</dd></div>
+      </dl>
+
+      <ul class="pills" style="margin-top:1.5rem">
+        <li>TypeScript</li><li>React 19</li><li>Vite 7</li><li>NestJS 11</li>
+        <li>Prisma</li><li>PostgreSQL</li><li>Redis</li><li>Zustand</li>
+        <li>TanStack Query</li><li>Emotion</li><li>ECharts</li><li>Web Bluetooth</li>
+        <li>Web Serial</li><li>Firebase FCM</li><li>Docker</li><li>GitHub Actions</li>
+        <li>Nginx</li><li>AWS EC2 + RDS</li>
+      </ul>
+    </section>
+
+    <!-- ============ 01 ARCHITECTURE ============ -->
+    <section id="arch">
+      <p class="eyebrow">01 — Architecture</p>
+      <h2>Two data paths, deliberately kept separate</h2>
+      <p>
+        A detector reaches the platform two ways, and conflating them was the first design mistake I had to
+        avoid. Live readings arrive <em>through</em> a phone acting as a relay. Historical logs are pulled
+        <em>directly</em> by a browser over BLE or a USB cradle, with no server involved in the transfer.
+      </p>
+
+      <div class="flow">
+        <div class="flow-row">
+          <b>Path A · live</b>
+          <span>Detector → BLE → mobile app (BellConnect) → <code>POST /api/bellconnect/packet</code> → API-key guard → parse → Postgres + Redis heartbeat</span>
+        </div>
+        <div class="flow-arrow">↕ independent</div>
+        <div class="flow-row">
+          <b>Path B · logs</b>
+          <span>Detector → Web Bluetooth / Web Serial → <strong>browser-local codec</strong> → chunk batches → <code>POST /api/device/lite-log/chunk/batch</code> → raw bytes staged → parsed</span>
+        </div>
+      </div>
+
+      <p>
+        Path B's codec runs entirely in the browser. That has a consequence worth stating because it cost me
+        real debugging time: <strong>wire packets never appear in server logs</strong>. When a technician reports
+        "the download failed", there is nothing server-side to grep — which is why that layer ended up being
+        the only part of the frontend with a real unit-test suite (§04).
+      </p>
+
+      <div class="grid three">
+        <article>
+          <h3>Frontend</h3>
+          <p>React 19 SPA on Vite. 10 Zustand stores, TanStack Query for everything server-owned, Emotion for styling, ECharts for gas-concentration plots. PWA with a hand-written service worker.</p>
+        </article>
+        <article>
+          <h3>Backend</h3>
+          <p>NestJS 11, 16 modules, global prefix <code>/api</code>. Prisma over PostgreSQL, Redis for heartbeats and cache, Firebase Admin for push, two cron jobs.</p>
+        </article>
+        <article>
+          <h3>Shared</h3>
+          <p>Yarn 4 workspaces. The protocol definitions, device types, RBAC role table and i18n resources are packages consumed by <em>both</em> apps — one source of truth per concept.</p>
+        </article>
+      </div>
+    </section>
+
+    <!-- ============ 02 PROTOCOL ============ -->
+    <section id="protocol">
+      <p class="eyebrow">02 — Device Protocol</p>
+      <h2>Packet layouts as data, not as code</h2>
+      <p>
+        Two detector families, each with ~8 command classes and its own field layout per function. Writing an
+        encoder per function would have meant hundreds of hand-rolled byte-offset functions — and every
+        firmware revision would touch dozens of them.
+      </p>
+      <p>
+        Instead each function declares its payload as a table of typed parameters, and one generic codec walks
+        the table in both directions. Adding a firmware function is a data edit.
+      </p>
+
+      <pre><code><span class="c">// packages/protocols/mini/fn_monitoring.ts — 0x02 response</span>
+<span class="k">0x02</span>: [
+  { name: <span class="v">'system_status'</span>, type: <span class="v">'u16'</span>, bytes: 2 },
+  { name: <span class="v">'timestamp'</span>,     type: <span class="v">'u32'</span>, bytes: 4, format: <span class="v">'date_seconds_from_basedate'</span> },
+  { name: <span class="v">'temperature'</span>,   type: <span class="v">'s16'</span>, bytes: 2, format: <span class="v">'temperature'</span> },
+  { name: <span class="v">'gas_conc'</span>,      type: <span class="v">'s32'</span>, bytes: 4, format: <span class="v">'gas_concentration'</span> },
+  <span class="c">/* … */</span>
+]</code></pre>
+
+      <p>
+        Decoding is a two-stage pipeline — <strong>wire type</strong> (bytes ↔ integer) then
+        <strong>format</strong> (integer ↔ domain value). Keeping them separate means
+        <code>u32</code> arithmetic is written once while 54 format handlers deal with the messy
+        domain semantics: gas concentration scaled by 1000, temperature by 10, LEL sensor voltage as
+        <code>(100 + raw) × 10</code> mV, bitfield enums, fixed-length arrays, MAC addresses.
+      </p>
+
+      <div class="tw">
+        <table>
+          <thead>
+            <tr><th>Layer</th><th class="n">Scale</th><th>Notes</th></tr>
+          </thead>
+          <tbody>
+            <tr><td>Function definitions</td><td class="n">91</td><td>BellLite 50 + BellMini 41, keyed by <code>(classId, functionId)</code></td></tr>
+            <tr><td>Parameter definitions</td><td class="n">295</td><td>Declarative; no per-function encoder code</td></tr>
+            <tr><td>Format handlers</td><td class="n">54</td><td>Shared by browser codec and backend parsers</td></tr>
+            <tr><td>Frame</td><td class="n">—</td><td><code>SOF 0x3C</code> · dst · src · seq · class · fn · len16 · payload · <code>CRC16</code> · <code>EOF 0x3E</code></td></tr>
+            <tr><td>CRC-16</td><td class="n">0x8005</td><td>MSB-first, init <code>0x0000</code> — one implementation, three call sites</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <h4>The epoch that would have corrupted every timestamp</h4>
+      <p>
+        Firmware reports time as <em>seconds since 2023-01-01 00:00:00 <strong>UTC</strong></em>. Three
+        independent code paths convert it: the browser codec, the live-ingest service, and five backend log
+        parsers. Had any one of them assumed KST — the obvious guess on a Korean product with
+        <code>TZ=Asia/Seoul</code> servers — its timestamps would be silently off by nine hours with nothing
+        failing loudly.
+      </p>
+      <p>
+        So the epoch is a single exported constant with a comment naming all three consumers and an explicit
+        prohibition on redefining it locally. Boring, but it is the kind of constant that is worth being
+        loud about.
+      </p>
+    </section>
+
+    <!-- ============ 03 BROWSER ↔ DEVICE ============ -->
+    <section id="browser">
+      <p class="eyebrow">03 — Browser ↔ Device</p>
+      <h2>One adapter interface over two incompatible transports</h2>
+      <p>
+        Web Bluetooth delivers bytes as GATT notifications. Web Serial delivers them from a read loop.
+        Above that difference, the detector protocol is identical — so the difference is isolated in two
+        adapter implementations and nothing above them knows which transport is live.
+      </p>
+
+      <dl class="defs">
+        <div>
+          <dt>DeviceAdapter</dt>
+          <dd>Six-method interface: mode switching, write, read, stream read, buffer clear.</dd>
+        </div>
+        <div>
+          <dt>BaseDeviceAdapter</dt>
+          <dd>Abstract base holding the request/response pairing, the stream queue and buffer-mode transitions. Subclasses supply only a read timeout, an i18n error key and a log prefix.</dd>
+        </div>
+        <div>
+          <dt>WebBleAdapter<br>WebSerialAdapter</dt>
+          <dd>Transport and connection lifecycle only — GATT characteristic acquisition with per-step timeouts and <code>gattserverdisconnected</code> handling on one side, port read loop on the other.</dd>
+        </div>
+        <div>
+          <dt>Communication modes</dt>
+          <dd>Strategy objects. <em>Single</em> — one request, one response (info, config read/write). <em>Burst</em> — header announces <code>num_packets</code>, switch to streaming, receive N chunks, merge, return to single.</dd>
+        </div>
+      </dl>
+
+      <h4>Three bugs that only exist against real hardware</h4>
+      <div class="grid two">
+        <article class="stripe warn">
+          <h3>The first chunk vanished</h3>
+          <p>
+            The detector starts firing burst packets <em>immediately</em> after the header response — before
+            the host finishes switching to streaming mode. Discarding the single-mode buffer on transition
+            therefore dropped the leading chunk every time.
+          </p>
+          <p>
+            Fix: when no reader is waiting, preserve the buffer and drain it <em>into</em> the stream queue on
+            transition instead of clearing it.
+          </p>
+        </article>
+        <article class="stripe warn">
+          <h3>Cancellation raced itself</h3>
+          <p>
+            Aborting a download means sending a stop command — but a frame arriving mid-write consumed the
+            pending resolver, so the next read failed. And building the stop packet at cancel time was too
+            late: the burst had already flooded the link.
+          </p>
+          <p>
+            Fix: pre-build and cache the stop packet when entering burst, abort <em>before</em> sending it,
+            then re-arm the pending resolver. Retries 3×, 500 ms apart.
+          </p>
+        </article>
+        <article class="stripe ok">
+          <h3>Frames arrive shredded</h3>
+          <p>
+            BLE hands over ~20 bytes at a time, so a frame spans several callbacks — and a payload byte can
+            legitimately equal <code>0x3C</code>, the start-of-frame marker.
+          </p>
+          <p>
+            A ring buffer (8 MB, power-of-two masking) feeds a parser that extracts CRC-validated frames and,
+            on desync, advances <strong>one byte at a time</strong> to resynchronise rather than discarding the
+            buffer.
+          </p>
+        </article>
+        <article class="stripe ok">
+          <h3>Tests instead of print statements</h3>
+          <p>
+            Framing, mode transitions and cancellation are deterministic given a byte stream — so each of those
+            bugs became a test case. 69 cases cover split frames, CRC mismatch recovery, embedded SOF bytes,
+            abort signals and the stop-command race.
+          </p>
+          <p>
+            Reproducing a race in a test file is dramatically faster than re-running a BLE session and reading
+            browser logs.
+          </p>
+        </article>
+      </div>
+    </section>
+
+    <!-- ============ 04 LOG INGESTION ============ -->
+    <section id="ingest">
+      <p class="eyebrow">04 — Log Ingestion</p>
+      <h2>Keep the raw bytes; the parser will be wrong at least once</h2>
+      <p>
+        A detector holds months of readings. Transfer is slow and comes over a link that can drop. The parser
+        has to interpret fixed-width binary records that differ per firmware version. Given that, assuming the
+        parser is correct on the first pass was not a safe bet — so the pipeline is built to be re-run.
+      </p>
+
+      <div class="flow">
+        <div class="flow-row"><b>Stage 1</b><span><code>*_log_data_info</code> — one row per download request: transfer status, downloaded count, retries, plus separate parse state (<code>parsed</code>, <code>parser_version</code>, <code>device_fw_version</code>)</span></div>
+        <div class="flow-arrow">↓</div>
+        <div class="flow-row"><b>Stage 2</b><span><code>*_log_data_chunk</code> — one row per wire packet, <strong>raw bytes preserved verbatim</strong> with its CRC, unique on <code>(log_id, chunk_index)</code></span></div>
+        <div class="flow-arrow">↓</div>
+        <div class="flow-row"><b>Stage 3</b><span><code>*_gas_reading_log</code>, <code>*_event_log</code>, <code>*_calibration_log</code>, … — typed records, idempotent on natural keys</span></div>
+      </div>
+
+      <p>
+        Because stage 2 survives, fixing a parser bug means fixing the parser and re-running it — not asking
+        a customer to re-download from the device. <code>parser_version</code> on stage 1 records which rows
+        need that treatment. Once parsed and verified, a purge endpoint reclaims the raw bytes.
+      </p>
+
+      <h4>Making re-ingestion safe</h4>
+      <p>
+        Re-running a parse has to be a no-op if the data is already there. Every parsed table carries a natural
+        unique key, so idempotency is enforced by Postgres rather than by application bookkeeping:
+      </p>
+      <div class="tw">
+        <table>
+          <thead><tr><th>Constraint</th><th>Protects against</th></tr></thead>
+          <tbody>
+            <tr><td><code>(log_id_int, record_index)</code></td><td>Re-parsing the same log file twice</td></tr>
+            <tr><td><code>(serial_number, timestamp)</code></td><td>The same physical sample arriving in two <em>different</em> log files — devices re-send overlapping time windows</td></tr>
+            <tr><td><code>(log_id, chunk_index)</code></td><td>Duplicated or missing wire packets during transfer</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <p>
+        Combined with <code>skipDuplicates</code> on bulk inserts, that second constraint is the one that
+        matters operationally — it collapses cross-file duplicates at the database level, where they cannot
+        be missed, instead of in a dedupe routine someone has to remember to call.
+      </p>
+
+      <h4>The hot table, optimised three ways</h4>
+      <p>
+        <code>lite_gas_reading_log</code> takes one record per sensor per sample, up to five sensors per
+        device. It is the only table in the schema that departs from the conventions used everywhere else,
+        and each departure is a deliberate trade:
+      </p>
+      <div class="tw">
+        <table>
+          <thead><tr><th>Decision</th><th>Saving</th><th>Cost accepted</th></tr></thead>
+          <tbody>
+            <tr>
+              <td>FK as <code>BigInt</code>, not UUID</td>
+              <td class="n">16 B → 8 B</td>
+              <td>A dedicated <code>log_id_mapping</code> table exists solely to translate UUID ↔ BigInt; the public API still exposes the non-enumerable UUID</td>
+            </tr>
+            <tr>
+              <td>Five sensors packed into one <code>TEXT</code> column</td>
+              <td class="n">~60%</td>
+              <td>Not queryable per-sensor in SQL; sibling tables keep readable JSON</td>
+            </tr>
+            <tr>
+              <td>3 indexes instead of 6–8</td>
+              <td class="n">write path</td>
+              <td>Some read patterns need a scan — accepted on a write-heavy table</td>
+            </tr>
+            <tr>
+              <td><code>Timestamp(0)</code>, second precision</td>
+              <td class="n">bytes</td>
+              <td>Matches the dedupe key granularity, so nothing is lost that was being used</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      <p>
+        Bulk insert runs in batches of 5,000 records inside a transaction, with chunk reassembly paged at 100
+        to bound memory and an explicit GC nudge past 500 MB heap. The parse transaction sets
+        <code>session_replication_role = 'replica'</code> to skip FK and trigger checks for the duration — a
+        real bulk-load trade-off, scoped to the transaction and worth naming rather than hiding.
+      </p>
+
+      <h4>Why the schema splits by device family</h4>
+      <p>
+        <code>lite_*</code> and <code>mini_*</code> tables are not sharding — they are vertical partitioning
+        by hardware capability. BellLite carries up to five sensors; BellMini carries one. A single table
+        would mean four permanently-NULL sensor column groups on every BellMini row. A
+        <code>devices_unified</code> view puts them back together for the queries that genuinely need both,
+        and <code>devices</code> itself holds only metadata.
+      </p>
+    </section>
+
+    <!-- ============ 05 LIVE AGGREGATION ============ -->
+    <section id="realtime">
+      <p class="eyebrow">05 — Live Aggregation</p>
+      <h2>Three tiers of freshness, because not everything needs to be live</h2>
+      <p>
+        The dashboard shows live gas readings next to 30-day alarm history next to device inventory. Polling
+        all of it every five seconds would have meant re-aggregating months of log data on every tick. So each
+        tier gets the latency it actually needs, and the client poll interval is paired with the server cache
+        TTL rather than chosen independently.
+      </p>
+
+      <div class="tw">
+        <table>
+          <thead>
+            <tr><th>Tier</th><th>Endpoint</th><th class="n">Client poll</th><th class="n">Server cache</th><th>Why</th></tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><strong>1 · Live</strong></td><td><code>/dashboard/live-aggregation</code></td>
+              <td class="n">5 s</td><td class="n">none</td>
+              <td>A gas alarm cannot be stale. Computed per request; reuses the monitoring query rather than re-querying</td>
+            </tr>
+            <tr>
+              <td><strong>2 · Semi-live</strong></td><td><code>/dashboard/alarm-history</code></td>
+              <td class="n">60 s</td><td class="n">60 s</td>
+              <td>Trend data. <code>staleTime</code> 50 s so the client never requests ahead of a cache it would only re-warm</td>
+            </tr>
+            <tr>
+              <td><strong>3 · Static</strong></td><td><code>/dashboard/static</code></td>
+              <td class="n">5 min</td><td class="n">300 s</td>
+              <td>Inventory and calibration-due counts change on human timescales</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      <p>
+        Cache keys are scoped by user id and filter, because the result of each query already depends on what
+        that role is permitted to see (§07). A tenant-blind cache key here would have been a data-leak bug,
+        not a performance bug.
+      </p>
+
+      <h4>Counting alarms without double-counting packets</h4>
+      <p>
+        Alarm state lives in a bitfield on each monitoring row. A device in alarm keeps reporting every few
+        seconds, so a naive count inflates with packet volume rather than reflecting how many devices are
+        actually in alarm. Prisma cannot express bitwise operators, so this tier uses raw SQL:
+      </p>
+      <pre><code><span class="k">SELECT</span> serial_number,
+       <span class="k">bool_or</span>((system_status & <span class="v">128</span>)  > 0) <span class="k">AS</span> had_low,
+       <span class="k">bool_or</span>((system_status & <span class="v">256</span>)  > 0) <span class="k">AS</span> had_high,
+       <span class="k">bool_or</span>((system_status & <span class="v">4096</span>) > 0) <span class="k">AS</span> had_stel,
+       <span class="k">bool_or</span>((system_status & <span class="v">8192</span>) > 0) <span class="k">AS</span> had_twa
+  <span class="k">FROM</span> lite_monitoring
+ <span class="k">WHERE</span> created_at > (<span class="k">NOW</span>() <span class="k">AT TIME ZONE</span> <span class="v">'UTC'</span>) - <span class="k">INTERVAL</span> <span class="v">'10 minutes'</span>
+   <span class="k">AND</span> (system_status & (<span class="v">128</span>|<span class="v">256</span>|<span class="v">4096</span>|<span class="v">8192</span>)) > 0
+ <span class="k">GROUP BY</span> serial_number</code></pre>
+      <p>
+        Three things are load-bearing. <code>bool_or</code> grouped by serial means one device counts once per
+        alarm type regardless of how many packets it sent. Pre-filtering alarm rows in the subquery keeps the
+        scan narrow. And <code>NOW() AT TIME ZONE 'UTC'</code> rather than bare <code>NOW()</code> makes the
+        window independent of the server's timezone — which matters because the process runs with
+        <code>TZ=Asia/Seoul</code>, so bare <code>NOW()</code> would shift the window by nine hours.
+      </p>
+      <p>
+        Site ids are injected as query parameters, not string-concatenated. Raw SQL earns its place in three
+        narrow cases here — Postgres-only operators, a view Prisma doesn't model, and table names chosen at
+        runtime from the device-type config — and nowhere else.
+      </p>
+
+      <div class="note">
+        <p>
+          <strong>One bitfield, two layouts.</strong> BellLite uses different bit positions on the wire than in
+          the monitoring table — <code>16/32/512/1024</code> versus <code>128/256/4096/8192</code> for
+          low/high/STEL/TWA. The live-ingest path and the aggregation path each read their own layout from the
+          device-type config table. Mixing them up produces plausible-looking counts that are entirely wrong,
+          which is exactly the class of bug that survives code review.
+        </p>
+      </div>
+    </section>
+
+    <!-- ============ 06 ALARM & PUSH ============ -->
+    <section id="alarm">
+      <p class="eyebrow">06 — Alarm &amp; Push</p>
+      <h2>Edge-triggered notifications, and offline as the absence of an event</h2>
+      <p>
+        A detector in alarm reports every few seconds. Pushing on every packet would send hundreds of
+        notifications for one incident. So alarm state per sensor is held in Redis and a push fires only on a
+        <strong>transition</strong> — one notification when an alarm starts, one when it clears, regardless of
+        how many packets carried it.
+      </p>
+
+      <h4>Detecting a device that stopped talking</h4>
+      <p>
+        "Offline" is the absence of data, which polling detects badly — a sweep either runs too often or finds
+        out too late. Instead each packet refreshes a Redis key with a 120-second TTL, and the server subscribes
+        to keyspace expiry events. The key expiring <em>is</em> the offline event; there is no scan loop.
+      </p>
+      <div class="flow">
+        <div class="flow-row"><b>On packet</b><span>Refresh <code>device:&lt;serial&gt;</code>, TTL 120 s. If it was absent, this is a reconnect → push <code>DEVICE_CONNECTED</code></span></div>
+        <div class="flow-arrow">↓ 120 s of silence</div>
+        <div class="flow-row"><b>Redis</b><span>Key expires → <code>__keyevent@0__:expired</code> → handler pushes <code>DEVICE_DISCONNECTED</code></span></div>
+        <div class="flow-arrow">↓</div>
+        <div class="flow-row"><b>Dedupe</b><span>An <code>SET NX</code> claim key suppresses the duplicate, since the expiry event and the explicit-disconnect path can both reach the same notification</span></div>
+      </div>
+
+      <p>
+        Recipients are resolved per tenant: the company's managers plus the site's assigned managers,
+        de-duplicated. Global admin roles are <em>excluded by design</em> — a SuperAdmin would otherwise
+        receive every alarm from every customer. Each push is generated per recipient locale, grouping tokens
+        by the language stored alongside them.
+      </p>
+
+      <h4>A token's expiry is a signal, not just a cleanup task</h4>
+      <p>
+        FCM tokens carry a 30-day TTL that refreshes on every visit. So a token approaching expiry
+        <em>is</em> a user who has not opened the app in nearly a month. A daily cron picks up tokens with
+        three days left and sends one re-engagement push while the token is still deliverable — turning
+        garbage collection into the only useful moment to reach that user.
+      </p>
+      <p>
+        Both cron jobs take a Redis <code>SET NX</code> lock before running, so a multi-replica deployment
+        doesn't send everything twice. The subscription scheduler additionally tracks sent stages in an
+        integer array on the row, making it idempotent even if the lock is unavailable and the job runs twice.
+      </p>
+    </section>
+
+    <!-- ============ 07 AUTH & TENANCY ============ -->
+    <section id="rbac">
+      <p class="eyebrow">07 — Auth &amp; Tenancy</p>
+      <h2>Five roles, one comparison, and a fallback that must fail closed</h2>
+      <p>
+        Roles are ordered numerically — SuperAdmin 0, Admin 1, CompanyManager 2, SiteManager 3, Guest 4 — so
+        the entire hierarchy check is <code>userRoleId &lt;= requiredRoleId</code>. One annotation covers a role
+        and everything above it rather than enumerating every permitted role at every endpoint.
+      </p>
+
+      <div class="note">
+        <p>
+          <strong>Why the fallback constant is spelled out explicitly.</strong> With SuperAdmin at
+          <code>0</code>, the idiomatic JavaScript fallback <code>role_id || 0</code> resolves an absent role
+          to <em>the highest privilege in the system</em>. A missing field would have become privilege
+          escalation, silently.
+        </p>
+        <p>
+          So the unknown-role fallback is a named Guest constant with both id and name set together, and the
+          permission resolver returns Guest for anything it doesn't recognise. Fail closed, by construction.
+        </p>
+      </div>
+
+      <p>
+        Tenancy is enforced in one place. A single scope service answers "which sites may this user see" —
+        Admin all, CompanyManager their company's, SiteManager those explicitly assigned via a join table,
+        anyone else none — and every consumer (dashboard, monitoring, sites, device ingest) calls it instead
+        of reimplementing the filter. It was consolidated there precisely because four slightly-different
+        copies had drifted.
+      </p>
+
+      <h4>Revoking access that was already granted</h4>
+      <p>
+        Access tokens live up to four hours. Revoking a refresh token does nothing to an access token already
+        in someone's hands — so a demoted user would keep their old privileges until it expired.
+      </p>
+      <p>
+        Each user row carries a session version, stamped into the token as a short <code>sv</code> claim and
+        checked server-side on every authenticated request. Bumping the column invalidates every outstanding
+        token for that user instantly. Role changes bump it in the <em>same transaction</em> as the role
+        update, so there is no window in which the new role and the old tokens coexist.
+      </p>
+      <p>
+        The honest cost: one indexed read per authenticated request, with no cache in front of it. That is a
+        deliberate choice of correctness over latency, and the check is enforced on both the HTTP guard and
+        the Passport strategy so the two paths cannot drift apart.
+      </p>
+
+      <div class="grid two">
+        <article>
+          <h4>Tokens</h4>
+          <p>
+            Refresh tokens are 32 random bytes, stored only as a SHA-256 hash, single-use and rotated on
+            every refresh — the old row is revoked as the new one is issued. Remember-me is carried forward
+            through rotation so a refresh doesn't silently shorten a 7-day session to 24 hours.
+          </p>
+        </article>
+        <article>
+          <h4>Role mutation guards</h4>
+          <p>
+            Four separate checks: you cannot change your own role, cannot grant a role above your own, cannot
+            modify a user ranked above you, and cannot grant Admin through this path at all — company
+            ownership is a NOT NULL foreign key whose reassignment would cascade into sites and devices.
+          </p>
+        </article>
+        <article>
+          <h4>Menu and route from one source</h4>
+          <p>
+            17 permission flags × 5 roles form one matrix. The sidebar filter and the route guards read the
+            same store, so a hidden menu item is also blocked when its URL is typed directly. Parent menus
+            disappear when every child is filtered out.
+          </p>
+        </article>
+        <article>
+          <h4>Capability detection, separately</h4>
+          <p>
+            Browser-direct configurator pages are hidden when Web Serial and Web Bluetooth are unavailable —
+            a feature-detection axis kept independent of permissions, since "not allowed" and "not possible"
+            are different answers and conflating them produces a dead menu item.
+          </p>
+        </article>
+      </div>
+    </section>
+
+    <!-- ============ 08 OPERATIONS ============ -->
+    <section id="ops">
+      <p class="eyebrow">08 — Operations</p>
+      <h2>Production and staging on one host, and the tooling to debug them</h2>
+      <p>
+        Both environments run on a single EC2 instance — 6 containers, separated three ways: distinct
+        container names, distinct host ports, and a separate Compose project so networks and volumes never
+        collide. Every port binds to <code>127.0.0.1</code> only; the host Nginx is the sole route in.
+        Environments share one RDS instance and are separated by PostgreSQL schema rather than by instance.
+      </p>
+
+      <div class="tw">
+        <table>
+          <thead><tr><th>Service</th><th>Production</th><th class="n">Port</th><th>Staging</th><th class="n">Port</th></tr></thead>
+          <tbody>
+            <tr><td>Frontend (Nginx)</td><td><code>bellcloud-frontend</code></td><td class="n">8082</td><td><code>…-frontend-dev</code></td><td class="n">8080</td></tr>
+            <tr><td>Backend (NestJS)</td><td><code>bellcloud-backend</code></td><td class="n">8000</td><td><code>…-backend-dev</code></td><td class="n">8001</td></tr>
+            <tr><td>Redis</td><td><code>bellcloud-redis</code></td><td class="n">6379</td><td><code>…-redis-dev</code></td><td class="n">6380</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <h4>Migrations applied twice, on purpose</h4>
+      <p>
+        The container entrypoint runs <code>prisma migrate deploy &amp;&amp; node main.js</code>, so a failed
+        migration means the container never starts — far better than an app running happily against the wrong
+        schema. The deploy script then copies the freshly-shipped migration files into the running container
+        and applies them again. Being idempotent, the second pass is free; it exists so a migration can land
+        without waiting on an image rebuild, and so the authoritative copy is the one from CI rather than
+        whatever was baked into a cached layer.
+      </p>
+
+      <div class="grid two">
+        <article>
+          <h4>CI/CD</h4>
+          <p>
+            Three workflows. <em>verify</em> builds both apps on PRs to block broken images. <em>deploy</em>
+            builds and pushes to GHCR, then ships over SSH — branch chooses the image tag, env file, Compose
+            file and deploy script through expressions rather than duplicated workflows.
+            <em>release</em> turns a <code>v*</code> tag into categorised release notes from conventional
+            commit prefixes.
+          </p>
+          <p>
+            Vite env vars are baked in as build args, since a built SPA cannot read runtime environment.
+          </p>
+        </article>
+        <article>
+          <h4>Staging is the harder script</h4>
+          <p>
+            Deliberately: staging deploys retry <code>up</code> three times with a prune between attempts,
+            report disk space before and after cleanup, then health-check the API for up to 60 seconds and
+            verify the frontend responds — collecting failures into a numbered summary.
+          </p>
+          <p>
+            It is where a deploy is allowed to fail loudly, so it is where the diagnostics live.
+          </p>
+        </article>
+      </div>
+
+      <h4>A log viewer that answers the question you actually asked</h4>
+      <p>
+        14 categorised log streams with tiered retention — 30 days for routine traffic, 60 for FCM and email,
+        90 for errors and security — rotated hourly and gzipped. Reaching them through
+        <code>docker exec</code> and <code>zcat</code> by hand is tedious enough that nobody does it under
+        pressure, so it is a deployed CLI instead:
+      </p>
+      <pre><code><span class="c"># environment, category, lines — order-free; -f follow, -s search</span>
+belllog prod error 50
+belllog dev bellconnect -f
+belllog prod auth -s <span class="v">"invalid token"</span></code></pre>
+      <p>
+        The parts that make it more than a <code>tail</code> wrapper are all lessons from being burned:
+        it <strong>probes which log directory actually exists</strong> rather than hardcoding a path that
+        breaks on environment drift; it pairs <code>cat</code>/<code>grep</code> with
+        <code>zcat</code>/<code>zgrep</code> so rotated archives stay searchable; it filters out the literal
+        <code>%DATE%</code> directory the rotation library leaves behind; and it
+        <strong>redacts bearer tokens and cookies on display</strong>, so output can be pasted into a ticket
+        safely. CI reinstalls it on every deploy, so it can never go stale against the code it inspects.
+      </p>
+
+      <div class="note">
+        <p>
+          <strong>The nine-hour trap.</strong> The host runs UTC; the backend container runs
+          <code>TZ=Asia/Seoul</code>. Application log <em>filenames</em> are therefore KST while the host's
+          <code>date</code> is UTC — so building a filename on the host fetches logs from nine hours ago, by
+          which time that file has been gzipped and even <code>tail</code> fails.
+        </p>
+        <p>
+          Correlating an application log with an Nginx log means applying the correction deliberately. This is
+          documented as an operational rule rather than left for the next person to rediscover at 2 a.m.
+        </p>
+      </div>
+    </section>
+
+    <!-- ============ 09 POST-MORTEM ============ -->
+    <section id="incident">
+      <p class="eyebrow">09 — Post-Mortem</p>
+      <h2>Two bugs, one architectural lesson</h2>
+      <p>
+        Production was writing debug-level logs. The fix took two attempts, and the second attempt is the part
+        worth keeping.
+      </p>
+
+      <div class="grid two">
+        <article class="stripe crit">
+          <h3>Bug 1 — one variable, two jobs</h3>
+          <p>
+            A single environment variable decided both the log directory <em>and</em> the log level. The level
+            check compared against <code>'prod'</code> only, so with <code>DEPLOY_ENV=production</code> the
+            path resolved correctly while the level fell through to the most verbose setting.
+          </p>
+          <p>
+            The diagnostic lesson: <strong>path and level had to be checked separately</strong>. The directory
+            looked right, which is exactly why the level went unexamined.
+          </p>
+          <p>
+            Verified by measurement, not inspection — debug entries in the production log went from
+            <strong>229 to 0</strong>.
+          </p>
+        </article>
+        <article class="stripe crit">
+          <h3>Bug 2 — the fix deleted itself</h3>
+          <p>
+            The first fix was editing the env file on the server. It worked, and vanished on the next deploy,
+            which overwrites that file from a secret every time.
+          </p>
+          <p>
+            Worse: deploy was not shipping the Compose file at all, so the server's copy had been frozen at a
+            week-old version. The repository already held correct values that had no path to production.
+          </p>
+          <p>
+            Structural fix: ship the Compose file and the log tool on every deploy, hardcode the environment
+            markers into Compose rather than leaving them to a secret-managed env file, and mount log
+            directories to the host so they survive container recreation.
+          </p>
+        </article>
+      </div>
+
+      <p class="lead" style="margin-top:1.5rem">
+        A configuration edit made on a server is not a fix — it is a fix with a deploy-shaped expiry date.
+        If the repository is the source of truth, then every file the runtime depends on has to travel with
+        the deploy, including the ones nobody thinks of as code.
+      </p>
+    </section>
+
+    <!-- ============ 10 SCOPE & LIMITS ============ -->
+    <section id="scope">
+      <p class="eyebrow">10 — Scope &amp; Limits</p>
+      <h2>What is done, and what honestly isn't</h2>
+      <p>
+        A portfolio that only lists wins is not useful for judging engineering. These are the gaps I would
+        raise myself in a review.
+      </p>
+
+      <div class="tw">
+        <table>
+          <thead><tr><th>Area</th><th>Status</th></tr></thead>
+          <tbody>
+            <tr>
+              <td><strong>BLE burst log download</strong></td>
+              <td>
+                <span style="color:var(--alarm)">Unresolved.</span> Serial cradle transfers complete reliably;
+                BLE burst has never completed — every attempt stalls on an unchanging stream read. Root cause
+                not yet isolated between host-side framing and firmware burst support. Documented rather than
+                papered over, since the host-side logic is shared and known-good on the serial path.
+              </td>
+            </tr>
+            <tr>
+              <td><strong>Burst reception rate</strong></td>
+              <td>
+                Even on the cradle, reception is not 100% — a missing-chunk re-request pass is what makes
+                transfers succeed. It works, but it is a mitigation, not a fix.
+              </td>
+            </tr>
+            <tr>
+              <td><strong>Test coverage</strong></td>
+              <td>
+                130 unit tests, concentrated where determinism pays off: 69 on protocol framing and transfer
+                logic, 61 on backend auth and ingest services. No component, hook or page tests; no E2E; no
+                coverage gate in CI. CI builds both apps but does not run the suite — a real gap.
+              </td>
+            </tr>
+            <tr>
+              <td><strong>Realtime transport</strong></td>
+              <td>
+                HTTP polling plus FCM push, not WebSockets. Fine at current fleet size; polling is the first
+                thing I would replace as device count grows.
+              </td>
+            </tr>
+            <tr>
+              <td><strong>Deploy strategy</strong></td>
+              <td>
+                <code>down</code> then <code>up</code> — a short downtime window and no automatic rollback.
+                Acceptable for this product's usage pattern; blue-green is the obvious next step.
+              </td>
+            </tr>
+            <tr>
+              <td><strong>Log volume</strong></td>
+              <td>
+                Docker's json-file driver has no size cap configured, so container stdout grows unbounded.
+                Identified with the fix specified; not yet applied.
+              </td>
+            </tr>
+            <tr>
+              <td><strong>Log table growth</strong></td>
+              <td>
+                No partitioning and no retention job on the reading tables. The per-row optimisations buy
+                headroom; time-based partitioning on the timestamp column is the planned next step, and the
+                existing index design is compatible with it.
+              </td>
+            </tr>
+            <tr>
+              <td><strong>Rate limiting / APM</strong></td>
+              <td>
+                Neither is in place. Observability is structured log files plus latency markers routed to a
+                performance stream above a 1-second threshold.
+              </td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      <h4>A note on what is shown here</h4>
+      <p>
+        BellCloud is commercial software and its repository is private, so this page describes architecture
+        and engineering decisions rather than linking source. Hostnames, credentials, customer names and
+        infrastructure addresses are deliberately omitted. Every figure quoted above is measured from the
+        codebase rather than estimated.
+      </p>
+
+      <footer>
+        BellCloud — IoT gas detector management platform · Jun – Nov 2026<br>
+        Full-stack: React · NestJS · PostgreSQL · Redis · Docker · AWS<br>
+        <a href="https://github.com/swandev618">github.com/swandev618</a>
+      </footer>
+    </section>
+  </main>
+</div>
+
+<script>
+  // Mark the section currently in view on the rail.
+  (function () {
+    var links = Array.prototype.slice.call(
+      document.querySelectorAll('#rail-nav a')
+    );
+    var byId = {};
+    links.forEach(function (a) { byId[a.getAttribute('href').slice(1)] = a; });
+
+    var sections = links
+      .map(function (a) { return document.getElementById(a.getAttribute('href').slice(1)); })
+      .filter(Boolean);
+
+    if (!('IntersectionObserver' in window) || !sections.length) return;
+
+    var visible = {};
+    var observer = new IntersectionObserver(function (entries) {
+      entries.forEach(function (e) { visible[e.target.id] = e.isIntersecting; });
+      var current = null;
+      for (var i = 0; i < sections.length; i++) {
+        if (visible[sections[i].id]) { current = sections[i].id; break; }
+      }
+      if (!current) return;
+      links.forEach(function (a) { a.classList.remove('on'); });
+      if (byId[current]) byId[current].classList.add('on');
+    }, { rootMargin: '-10% 0px -70% 0px', threshold: 0 });
+
+    sections.forEach(function (s) { observer.observe(s); });
+  })();
+</script>
+
+</body>
+</html>
