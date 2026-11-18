@@ -450,6 +450,58 @@
     .defs > div { grid-template-columns: 1fr; gap: 0.3rem; }
   }
 
+  /* ---------- Screenshots ---------- */
+  .shot {
+    margin: 0 0 1.6rem;
+    border: 1px solid var(--line);
+    border-radius: 4px;
+    overflow: hidden;
+    background: var(--surface);
+  }
+  .shot img {
+    display: block;
+    width: 100%;
+    height: auto;
+    /* Captures come from the product's light UI; soften on a dark ground
+       so they don't glare, and leave them untouched in light mode. */
+    filter: none;
+  }
+  @media (prefers-color-scheme: dark) {
+    .shot img { filter: brightness(.88) contrast(1.02); }
+  }
+  :root[data-theme="dark"] .shot img { filter: brightness(.88) contrast(1.02); }
+  :root[data-theme="light"] .shot img { filter: none; }
+
+  .shot figcaption {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    gap: 0.5rem 1.2rem;
+    align-items: baseline;
+    padding: 0.75rem 1rem;
+    border-top: 1px solid var(--line-soft);
+    background: var(--surface-2);
+    font-size: 0.86rem;
+    color: var(--text-dim);
+  }
+  .shot figcaption b {
+    color: var(--text);
+    font-weight: 600;
+  }
+  .shot figcaption span {
+    font-family: var(--font-mono);
+    font-size: 0.65rem;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--text-mute);
+    white-space: nowrap;
+  }
+  .shot figcaption p {
+    grid-column: 1 / -1;
+    margin: 0;
+    font-size: 0.88rem;
+    max-width: none;
+  }
+
   @media (prefers-reduced-motion: reduce) {
     * { transition: none !important; scroll-behavior: auto !important; }
   }
@@ -461,16 +513,17 @@
     <a class="rail-mark" href="#top">Bell<span>Cloud</span></a>
     <nav id="rail-nav">
       <a href="#top"><i>00</i>Overview</a>
-      <a href="#arch"><i>01</i>Architecture</a>
-      <a href="#protocol"><i>02</i>Device Protocol</a>
-      <a href="#browser"><i>03</i>Browser ↔ Device</a>
-      <a href="#ingest"><i>04</i>Log Ingestion</a>
-      <a href="#realtime"><i>05</i>Live Aggregation</a>
-      <a href="#alarm"><i>06</i>Alarm &amp; Push</a>
-      <a href="#rbac"><i>07</i>Auth &amp; Tenancy</a>
-      <a href="#ops"><i>08</i>Operations</a>
-      <a href="#incident"><i>09</i>Post-Mortem</a>
-      <a href="#scope"><i>10</i>Scope &amp; Limits</a>
+      <a href="#screens"><i>01</i>The Product</a>
+      <a href="#arch"><i>02</i>Architecture</a>
+      <a href="#protocol"><i>03</i>Device Protocol</a>
+      <a href="#browser"><i>04</i>Browser ↔ Device</a>
+      <a href="#ingest"><i>05</i>Log Ingestion</a>
+      <a href="#realtime"><i>06</i>Live Aggregation</a>
+      <a href="#alarm"><i>07</i>Alarm &amp; Push</a>
+      <a href="#rbac"><i>08</i>Auth &amp; Tenancy</a>
+      <a href="#ops"><i>09</i>Operations</a>
+      <a href="#incident"><i>10</i>Post-Mortem</a>
+      <a href="#scope"><i>11</i>Scope &amp; Limits</a>
     </nav>
     <div class="rail-foot">
       Jun – Nov 2026<br>
@@ -495,6 +548,7 @@
         I built and operate the whole thing — React SPA, NestJS API, Postgres schema, the binary protocol
         codec shared by both, and the CI/CD that ships it. This page walks through the engineering decisions
         that were actually difficult, including the ones that are still unresolved.
+        <a href="#screens">See the product first →</a>
       </p>
 
       <dl class="readout">
@@ -516,9 +570,101 @@
       </ul>
     </section>
 
-    <!-- ============ 01 ARCHITECTURE ============ -->
+    <!-- ============ 01 THE PRODUCT ============ -->
+    <section id="screens">
+      <p class="eyebrow">01 — The Product</p>
+      <h2>What the engineering actually produces</h2>
+      <p>
+        Four screens from the running production system. Each one is the visible end of a problem
+        described later on this page — so where a capture shows something structural, the caption says
+        which section explains it.
+      </p>
+      <p>
+        Personal names, emails and phone numbers are replaced with placeholders. Everything else —
+        device counts, serials, calibration figures, sensor readings — is live production data from our
+        own tenant.
+      </p>
+
+      <figure class="shot">
+        <img src="screens/dashboard.png"
+             width="1600" height="1000" loading="lazy" decoding="async"
+             alt="BellCloud Overview dashboard showing calibration and bump-test status for 33 devices, with online totals and four alarm tiles for high, low, TWA and STEL.">
+        <figcaption>
+          <b>Overview — the three-tier dashboard</b>
+          <span>§06 Live Aggregation</span>
+          <p>
+            Every tile here comes from a different freshness tier. Calibration and bump-test counts
+            (<em>6 of 33 due, 18.2%</em>) are static-tier data cached five minutes; the high/low/TWA/STEL
+            tiles are live-tier, recomputed per request on a five-second poll. The "10 mins ago" column
+            beside each alarm count is the semi-live tier. One screen, three cache policies — which is
+            the whole reason that section exists.
+          </p>
+        </figcaption>
+      </figure>
+
+      <figure class="shot">
+        <img src="screens/configurator.png"
+             width="1440" height="900" loading="lazy" decoding="async"
+             alt="BellLite configurator showing General settings and five side-by-side sensor panels for O2, EX, H2S, CO and CO2, each with calibration gas concentration, calibration and bump intervals, and low, high, TWA and STEL alarm thresholds.">
+        <figcaption>
+          <b>Configurator — five sensors, no server in the path</b>
+          <span>§04 Browser ↔ Device · §05 Schema</span>
+          <p>
+            <em>Connect via Bluetooth</em> and <em>Connect via Cradle</em> are Web Bluetooth and Web Serial;
+            writing these settings encodes a packet in the browser and sends it straight to the detector.
+            The five sensor columns are also the reason the database splits <code>lite_*</code> from
+            <code>mini_*</code> — BellLite carries up to five sensors with independent alarm thresholds,
+            BellMini carries one.
+          </p>
+        </figcaption>
+      </figure>
+
+      <figure class="shot">
+        <img src="screens/datalog.png"
+             width="1440" height="900" loading="lazy" decoding="async"
+             alt="Data Log screen with an oxygen concentration time-series chart on dual axes for percent volume and temperature, above a table of parsed records showing time, concentration, temperature, battery voltage, system status and sensor status.">
+        <figcaption>
+          <b>Data Log — parsed binary, rendered</b>
+          <span>§03 Protocol · §05 Ingestion</span>
+          <p>
+            Oxygen holding at <em>20.9 %VOL</em> with temperature dashed on the right axis. The table
+            underneath is the pipeline's output: each row was a fixed-width binary record inside a chunk
+            of raw bytes the device streamed over the cradle, carrying its own battery voltage and
+            decoded sensor-status flags. The <em>Import Log</em> panel on the left is where that
+            transfer starts.
+          </p>
+        </figcaption>
+      </figure>
+
+      <figure class="shot">
+        <img src="screens/management.png"
+             width="1440" height="900" loading="lazy" decoding="async"
+             alt="Management screen showing company information, subscription expiry with days remaining, a site list with per-site device counts, and a site manager table with assigned sites and registration status.">
+        <figcaption>
+          <b>Management — where tenancy becomes visible</b>
+          <span>§08 Auth &amp; Tenancy</span>
+          <p>
+            A company, its sites, and site managers with explicitly assigned sites — the join table that
+            decides which devices a SiteManager can see at all. <em>2 / 5</em> is the device cap enforced
+            against the subscription, and <em>922 days left</em> is the expiry the nightly scheduler
+            watches: expire, grace period, then cascade delete.
+          </p>
+        </figcaption>
+      </figure>
+
+      <div class="note">
+        <p>
+          <strong>Not shown: the realtime map.</strong> It renders only devices currently transmitting,
+          and no detector was powered on when these were captured — so the honest capture is an empty
+          one. Device-offline detection is covered in §07; the map itself plots the live positions that
+          arrive with each packet.
+        </p>
+      </div>
+    </section>
+
+    <!-- ============ 02 ARCHITECTURE ============ -->
     <section id="arch">
-      <p class="eyebrow">01 — Architecture</p>
+      <p class="eyebrow">02 — Architecture</p>
       <h2>Two data paths, deliberately kept separate</h2>
       <p>
         A detector reaches the platform two ways, and conflating them was the first design mistake I had to
@@ -563,7 +709,7 @@
 
     <!-- ============ 02 PROTOCOL ============ -->
     <section id="protocol">
-      <p class="eyebrow">02 — Device Protocol</p>
+      <p class="eyebrow">03 — Device Protocol</p>
       <h2>Packet layouts as data, not as code</h2>
       <p>
         Two detector families, each with ~8 command classes and its own field layout per function. Writing an
@@ -624,7 +770,7 @@
 
     <!-- ============ 03 BROWSER ↔ DEVICE ============ -->
     <section id="browser">
-      <p class="eyebrow">03 — Browser ↔ Device</p>
+      <p class="eyebrow">04 — Browser ↔ Device</p>
       <h2>One adapter interface over two incompatible transports</h2>
       <p>
         Web Bluetooth delivers bytes as GATT notifications. Web Serial delivers them from a read loop.
@@ -706,7 +852,7 @@
 
     <!-- ============ 04 LOG INGESTION ============ -->
     <section id="ingest">
-      <p class="eyebrow">04 — Log Ingestion</p>
+      <p class="eyebrow">05 — Log Ingestion</p>
       <h2>Keep the raw bytes; the parser will be wrong at least once</h2>
       <p>
         A detector holds months of readings. Transfer is slow and comes over a link that can drop. The parser
@@ -802,7 +948,7 @@
 
     <!-- ============ 05 LIVE AGGREGATION ============ -->
     <section id="realtime">
-      <p class="eyebrow">05 — Live Aggregation</p>
+      <p class="eyebrow">06 — Live Aggregation</p>
       <h2>Three tiers of freshness, because not everything needs to be live</h2>
       <p>
         The dashboard shows live gas readings next to 30-day alarm history next to device inventory. Polling
@@ -838,7 +984,7 @@
 
       <p>
         Cache keys are scoped by user id and filter, because the result of each query already depends on what
-        that role is permitted to see (§07). A tenant-blind cache key here would have been a data-leak bug,
+        that role is permitted to see (§08). A tenant-blind cache key here would have been a data-leak bug,
         not a performance bug.
       </p>
 
@@ -883,7 +1029,7 @@
 
     <!-- ============ 06 ALARM & PUSH ============ -->
     <section id="alarm">
-      <p class="eyebrow">06 — Alarm &amp; Push</p>
+      <p class="eyebrow">07 — Alarm &amp; Push</p>
       <h2>Edge-triggered notifications, and offline as the absence of an event</h2>
       <p>
         A detector in alarm reports every few seconds. Pushing on every packet would send hundreds of
@@ -929,7 +1075,7 @@
 
     <!-- ============ 07 AUTH & TENANCY ============ -->
     <section id="rbac">
-      <p class="eyebrow">07 — Auth &amp; Tenancy</p>
+      <p class="eyebrow">08 — Auth &amp; Tenancy</p>
       <h2>Five roles, one comparison, and a fallback that must fail closed</h2>
       <p>
         Roles are ordered numerically — SuperAdmin 0, Admin 1, CompanyManager 2, SiteManager 3, Guest 4 — so
@@ -1013,7 +1159,7 @@
 
     <!-- ============ 08 OPERATIONS ============ -->
     <section id="ops">
-      <p class="eyebrow">08 — Operations</p>
+      <p class="eyebrow">09 — Operations</p>
       <h2>Production and staging on one host, and the tooling to debug them</h2>
       <p>
         Both environments run on a single EC2 instance — 6 containers, separated three ways: distinct
@@ -1107,7 +1253,7 @@ belllog prod auth -s <span class="v">"invalid token"</span></code></pre>
 
     <!-- ============ 09 POST-MORTEM ============ -->
     <section id="incident">
-      <p class="eyebrow">09 — Post-Mortem</p>
+      <p class="eyebrow">10 — Post-Mortem</p>
       <h2>Two bugs, one architectural lesson</h2>
       <p>
         Production was writing debug-level logs. The fix took two attempts, and the second attempt is the part
@@ -1158,7 +1304,7 @@ belllog prod auth -s <span class="v">"invalid token"</span></code></pre>
 
     <!-- ============ 10 SCOPE & LIMITS ============ -->
     <section id="scope">
-      <p class="eyebrow">10 — Scope &amp; Limits</p>
+      <p class="eyebrow">11 — Scope &amp; Limits</p>
       <h2>What is done, and what honestly isn't</h2>
       <p>
         A portfolio that only lists wins is not useful for judging engineering. These are the gaps I would
